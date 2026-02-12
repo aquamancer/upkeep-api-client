@@ -1,6 +1,7 @@
 import atexit
+import getpass
+from datetime import datetime
 import sys
-import os
 from pathlib import Path
 import time
 import json
@@ -17,8 +18,13 @@ def on_exit(auth_token):
     )
 
 
-# request for auth token had its response piped into this program
-auth_response = json.load(sys.stdin)
+print("Upkeep Work Order Downloader")
+email = input("Enter email: ")
+password = getpass.getpass(prompt="Enter password: ")
+
+auth_response = requests.post("https://api.onupkeep.com/api/v2/auth",
+                              data={"email": email, "password": password}
+                              ).json()
 
 if auth_response["success"] is False:
     print("Authentication token response failed")
@@ -26,12 +32,12 @@ if auth_response["success"] is False:
     sys.exit(1)
 
 auth_token = auth_response["result"]["sessionToken"]
-# to be sent in http requests to api
+# to be sent in http requests to upkeep api
 auth_token_header = {"Session-Token": auth_token}
 atexit.register(on_exit, auth_token)  # deactivate auth token on exit
 print("Auth token successfully generated")
 print(f"Auth token will expire on {auth_response["result"]["expiresAt"]}")
-del auth_response  # raw response no longer needed
+del email, password, auth_response
 
 print("Fetching all work orders...")
 work_orders_raw = requests.get("https://api.onupkeep.com/api/v2/work-orders",
@@ -63,8 +69,8 @@ def get_data_for_id(id, api_folder_name, folder_cache, auth_token_header):
     ).json()
 
     if subpage["success"] is False:
-        print(f"Response failed for: {subpage_url}", sys.stderr)
-        print(subpage, sys.stderr)
+        print(f"Response failed for: {subpage_url}", file=sys.stderr)
+        print(subpage, file=sys.stderr)
         return None
 
     print(f"Fetched new page: {api_folder_name}/{id}")
@@ -189,56 +195,50 @@ def prompt_load_file_cache(folder_cache):
     # grab a single file in the cache to determine the cache age
     oldest_file = None
     oldest_file_mtime = None
+    files_in_cache = 0
     for folder_name in folder_cache:
         folder = cache_dir / folder_name
         folder.mkdir(exist_ok=True)
         if not folder.is_dir():
             continue
-        for child in folder.iterdir():
+        for child in folder.glob("*.json"):
             if not child.is_file:
                 continue
             child_mtime = child.stat().st_mtime
             if oldest_file_mtime is None or child_mtime < oldest_file_mtime:
                 oldest_file_mtime = child_mtime
                 oldest_file = child
+            files_in_cache = files_in_cache + 1
 
     if oldest_file is None:
         print("No file cache found")
-        return
+        return False
 
     cache_age_seconds = time.time() - oldest_file_mtime
     hours = math.floor(cache_age_seconds / 3600)
     minutes = math.floor((cache_age_seconds % 3600) / 60)
     seconds = math.floor(cache_age_seconds % 60)
 
-    print(f"""Subpage cache detected with \
-oldest file age {hours}h{minutes}m{seconds}s.
-Would you like to use it? (y/N)""")
+    use_cache = input(f"""Subpage cache found {files_in_cache} files with \
+oldest age of: {hours}h{minutes}m{seconds}s
+Would you like to use it? (y/N): """)
 
-    use_cache = sys.__stdin__.readline()
-    print(use_cache)
+    if use_cache.lower() != "y":
+        print("Cache will be updated on this run")
+        return False
 
-    return
-
-    if use_cache != "Y":
-        print("Clearing file cache")
-        for folder_name in folder_cache:
-            folder = cache_dir / folder_name
-            for file in folder.glob("*.json"):
-                file.unlink()
-        return
-
-    files_cached = 0
+    cached_files_loaded = 0
     for folder_name in folder_cache:
         folder = cache_dir / folder_name
         for file in folder.glob("*.json"):
             with file.open("r") as f:
                 data = json.load(f)
                 if "id" in data and data["id"] != "" and data["id"] is not None:
-                    folder_cache[folder_name]["id"] = data
-                    files_cached = files_cached + 1
+                    folder_cache[folder_name][data["id"]] = data
+                    cached_files_loaded = cached_files_loaded + 1
 
-    print(f"Files loaded from cache: {files_cached}")
+    print(f"Files loaded from cache: {cached_files_loaded}")
+    return True
 
 
 def save_cache(folder_cache):
@@ -249,6 +249,14 @@ def save_cache(folder_cache):
     cache_dir.mkdir(exist_ok=True)
     if not cache_dir.is_dir():
         return
+
+    # remove all existing cached files
+    for folder_name in folder_cache:
+        folder = cache_dir / folder_name
+        for file in folder.glob("*.json"):
+            file.unlink()
+
+    files_cached = 0
     for folder_name in folder_cache:
         folder = cache_dir / folder_name
         folder.mkdir(exist_ok=True)
@@ -258,6 +266,8 @@ def save_cache(folder_cache):
             export = folder / f"{id}.json"
             with export.open("w") as f:
                 f.write(json.dumps(folder_cache[folder_name][id], indent=4))
+            files_cached = files_cached + 1
+    print(f"Supages cached (saved to disk): {files_cached}")
 
 
 # keys must exactly match upkeep's api subpage name
@@ -267,7 +277,7 @@ folder_cache = {
     "users": {}
 }
 
-prompt_load_file_cache(folder_cache)
+file_cache_used = prompt_load_file_cache(folder_cache)
 
 i = 1
 for work_order in work_orders:
@@ -309,9 +319,21 @@ for work_order in work_orders:
         print(f"Progress: {i}/{len(work_orders)}")
 
 
+root_dir = Path(__file__).parent
+export_dir = root_dir / "upkeep-csv-exports"
+if not root_dir.is_dir():
+    print("Could not export csv: parent dir of python file does not exist")
+    sys.exit(1)
+export_dir.mkdir(exist_ok=True)
+if not export_dir.is_dir():
+    print(f"Could not export csv: {export_dir} could not be created")
+
+timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+export_path = export_dir / f"{timestamp}.csv"
+
 export = pandas.json_normalize(work_orders, sep='.')
-export_path = os.path.join(os.path.dirname(
-    os.path.realpath(__file__)), "export4.csv")
-with open(export_path, "w") as csv_path:
+with export_path.open("w") as csv_path:
     export.to_csv(csv_path)
-save_cache(folder_cache)
+    print(f"Exported csv to: {export_path}")
+if not file_cache_used:
+    save_cache(folder_cache)

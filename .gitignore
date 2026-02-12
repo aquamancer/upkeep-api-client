@@ -1,2 +1,3 @@
 *.csv
 upkeep-api-cache/
+upkeep-csv-exports/
