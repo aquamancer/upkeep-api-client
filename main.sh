@@ -19,4 +19,4 @@ curl "https://api.onupkeep.com/api/v2/auth" \
   -X POST \
   -d email="$email" \
   -d password="$password" \
-  | python parse_authtoken.py # pipe response to py authtoken parser
+  | python main.py

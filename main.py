@@ -45,158 +45,183 @@ del work_orders_raw
 print(f"Loaded {len(work_orders)} work orders")
 
 
-def replace_ids_with_child_field(work_order,
-                                 id_keys,
-                                 child_field_replacement_key,
-                                 cached_ids,
-                                 auth_token_header,
-                                 api_subpage_name):
-    for id_key in id_keys:
-        if id_key not in work_order:
-            # print(f"Key '{id_key}' not in work order {work_order["id"]}")
+def get_data_for_id(id, api_folder_name, folder_cache, auth_token_header):
+    if id == "" or id is None:
+        return None
+
+    if id in folder_cache[api_folder_name]:
+        return folder_cache[api_folder_name][id]
+
+    subpage_url = f"https://api.onupkeep.com/api/v2/{api_folder_name}/{id}"
+    subpage = requests.get(
+        subpage_url,
+        headers=auth_token_header
+    ).json()
+
+    if subpage["success"] is False:
+        print(f"Response failed for: {subpage_url}", sys.stderr)
+        print(subpage, sys.stderr)
+        return None
+
+    print(f"Fetched new page: {api_folder_name}/{id}")
+    folder_cache[api_folder_name][id] = subpage["result"]
+    return subpage["result"]
+
+
+def replace_ids_with_full_data(work_order, id_field_name_to_api_folder_name, folder_cache, auth_token_header):
+    for id_field_name in id_field_name_to_api_folder_name:
+        if id_field_name not in work_order:
             continue
 
-        # replace work_order.asset with work_order.asset.result.{replace_with}
-        id = work_order[id_key]
-        if id == "" or id is None:
+        # since these replace functions convert key: "id" into key: {...},
+        # we must initially convert key: "id" to key: {"id": "id"}
+        # s.t. in case the replace function fails, there are no occurrences
+        # left behind of key: string that would create a (mostly) empty column
+        # when converting work orders to CSV.
+        # since all subpage data has "id" field, said failures will not make
+        # a new column
+        if not isinstance(work_order[id_field_name], dict):
+            work_order[id_field_name] = {"id": work_order[id_field_name]}
+
+        if "id" not in work_order[id_field_name]:
             continue
 
-        if id in cached_ids:
-            # need this conditional since we cache subpages even if
-            # the desired key/value pair doesn't exist
-            if child_field_replacement_key in cached_ids[id]:
-                work_order[id_key] = cached_ids[id][child_field_replacement_key]
-        else:
-            child_api_url = f"https://api.onupkeep.com/api/v2/{
-                api_subpage_name}/{id}"
-            fetched = requests.get(
-                child_api_url,
-                headers=auth_token_header
-            ).json()
+        api_folder_name = id_field_name_to_api_folder_name[id_field_name]
+        subpage = get_data_for_id(work_order[id_field_name]["id"],
+                                  api_folder_name,
+                                  folder_cache,
+                                  auth_token_header)
+        if subpage is None:
+            continue
 
-            if fetched["success"] is False:
-                if "not found" in fetched["message"]:
-                    # data for id doesn't exist
-                    print(
-                        f"No page/data exists for {id_key} ID: {id}", sys.stderr)
-                else:
-                    print(f"{id_key} response failed for: {
-                          child_api_url}", sys.stderr)
-                    print(fetched, sys.stderr)
+        work_order[id_field_name] = subpage
+
+
+def replace_ids_with_select_fields(work_order, id_field_name_to_api_folder_name, replacement_fields, folder_cache, auth_token_header):
+    for id_field_name in id_field_name_to_api_folder_name:
+        if id_field_name not in work_order:
+            continue
+
+        # since these replace functions convert key: "id" into key: {...},
+        # we must initially convert key: "id" to key: {"id": "id"}
+        # s.t. in case the replace function fails, there are no occurrences
+        # left behind of key: string that would create a (mostly) empty column
+        # when converting work orders to CSV.
+        # since all subpage data has "id" field, said failures will not make
+        # a new column
+        if not isinstance(work_order[id_field_name], dict):
+            work_order[id_field_name] = {"id": work_order[id_field_name]}
+
+        if "id" not in work_order[id_field_name]:
+            continue
+
+        api_folder_name = id_field_name_to_api_folder_name[id_field_name]
+        subpage = get_data_for_id(work_order[id_field_name]["id"],
+                                  api_folder_name,
+                                  folder_cache,
+                                  auth_token_header)
+        if subpage is None:
+            continue
+
+        replacement = {}
+        for replacement_field in replacement_fields:
+            if replacement_field not in subpage:
                 continue
 
-            print(f"Fetched new page: {api_subpage_name}/{id}")
-            # need this conditional since the fetched subpage could just not
-            # have the key/value pair
-            if child_field_replacement_key in fetched["result"]:
-                work_order[id_key] = fetched["result"][child_field_replacement_key]
-            # add to cache regardless if the key/value pair exists
-            # there is a conditional on a cache hit to check if the key/value
-            # pair exists so this is ok
-            # also there could be an id that would make use of the cache wants
-            # to be replaced with a child key that actually exists
-            cached_ids[id] = fetched["result"]
+            replacement[replacement_field] = subpage[replacement_field]
+
+        work_order[id_field_name] = replacement
 
 
-# todo clean this up
-def replace_user_id_with_fullname(work_order,
-                                  id_keys,
-                                  child_field_replacement_keys,
-                                  cached_ids,
-                                  auth_token_header,
-                                  api_subpage_name):
-    for id_key in id_keys:
-        if id_key not in work_order:
-            # print(f"Key '{id_key}' not in work order {work_order["id"]}")
+def replace_user_ids_with_fullname(work_order, user_id_field_names, folder_cache, auth_token_header):
+    for user_id_field_name in user_id_field_names:
+        if user_id_field_name not in work_order:
             continue
 
-        # replace work_order.asset with work_order.asset.result.{replace_with}
-        id = work_order[id_key]
-        if id == "" or id is None:
+        # since these replace functions convert key: "id" into key: {...},
+        # we must initially convert key: "id" to key: {"id": "id"}
+        # s.t. in case the replace function fails, there are no occurrences
+        # left behind of key: string that would create a (mostly) empty column
+        # when converting work orders to CSV.
+        # since all subpage data has "id" field, said failures will not make
+        # a new column
+        if not isinstance(work_order[user_id_field_name], dict):
+            work_order[user_id_field_name] = {
+                "id": work_order[user_id_field_name]}
+
+        if "id" not in work_order[user_id_field_name]:
             continue
 
-        if id in cached_ids and "fullName" in cached_ids[id] and cached_ids[id]["fullName"] != "":
-            work_order[id_key] = cached_ids[id]["fullName"]
-        else:
-            child_api_url = f"https://api.onupkeep.com/api/v2/{
-                api_subpage_name}/{id}"
-            fetched = requests.get(
-                child_api_url,
-                headers=auth_token_header
-            ).json()
+        api_folder_name = "users"
+        subpage = get_data_for_id(work_order[user_id_field_name]["id"],
+                                  api_folder_name,
+                                  folder_cache,
+                                  auth_token_header)
+        if subpage is None:
+            continue
 
-            if fetched["success"] is False:
-                if "not found" in fetched["message"]:
-                    # data for id doesn't exist
-                    print(
-                        f"No page/data exists for {id_key} ID: {id}", sys.stderr)
-                else:
-                    print(f"{id_key} response failed for: {
-                          child_api_url}", sys.stderr)
-                    print(fetched, sys.stderr)
-                continue
+        replacement = {}
+        if "id" in subpage:
+            replacement["id"] = subpage["id"]
 
-            print(f"Fetched new page: {api_subpage_name}/{id}")
-            # need this conditional since the fetched subpage could just not
-            # have the key/value pair
-            replacement_value = ""
-            first_word = True
-            for child_key in child_field_replacement_keys:
-                if child_key in fetched["result"]:
-                    if first_word:
-                        first_word = False
-                    else:
-                        replacement_value += " "
-
-                    replacement_value += fetched["result"][child_key]
-
-            if replacement_value != "":
-                work_order[id_key] = replacement_value
-            cached_ids[id] = fetched["result"]
-            # add fullName to cache to avoid recombining first and last name
-            cached_ids[id]["fullName"] = replacement_value
+        fullname = ""
+        if "firstName" in subpage:
+            fullname = subpage["firstName"]
+        if "lastName" in subpage:
+            fullname += " "
+            fullname += subpage["lastName"]
+        replacement["fullName"] = fullname
+        work_order[user_id_field_name] = replacement
 
 
-asset_cache = {}
-location_cache = {}
-user_cache = {}
+# keys must exactly match upkeep's api subpage name
+folder_cache = {
+    "assets": {},
+    "locations": {},
+    "users": {}
+}
 
 i = 1
 for work_order in work_orders:
-    # replace asset ids
-    replace_ids_with_child_field(
-        work_order,
-        ["asset"],
-        "category",
-        asset_cache,
-        auth_token_header,
-        "assets"
-    )
-    # replace location ids
-    replace_ids_with_child_field(
-        work_order,
-        ["location", "objectLocationForWorkOrder"],
-        "name",
-        location_cache,
-        auth_token_header,
-        "locations"
-    )
-    # replace user ids
-    replace_user_id_with_fullname(
-        work_order,
-        ["completedByUser", "assignedByUser", "assignedToUser", "updatedBy"],
-        ["firstName", "lastName"],
-        user_cache,
-        auth_token_header,
-        "users"
-    )
+    # <id field name>: <upkeep api folder name it is under>
+    fields_to_be_replaced_with_full_data = {
+        "asset": "assets",
+        "location": "locations",
+        "objectLocationForWorkOrder": "locations"
+    }
+    replace_ids_with_full_data(work_order,
+                               fields_to_be_replaced_with_full_data,
+                               folder_cache,
+                               auth_token_header
+                               )
+
+    # fields_to_be_replaced_with_select_subpage_fields = {
+    #     "location": "locations",
+    #     "objectLocationForWorkOrder": "locations"
+    # }
+    # select_fields_replacement = ["id", "name"]
+    # replace_ids_with_select_fields(work_order,
+    #                                fields_to_be_replaced_with_select_subpage_fields,
+    #                                select_fields_replacement,
+    #                                folder_cache,
+    #                                auth_token_header
+    #                                )
+
+    user_fields_to_be_replaced_with_fullname = ["completedByUser",
+                                                "assignedByUser",
+                                                "assignedToUser",
+                                                "updatedBy"]
+    replace_user_ids_with_fullname(work_order,
+                                   user_fields_to_be_replaced_with_fullname,
+                                   folder_cache,
+                                   auth_token_header)
 
     i = i + 1
     if (i % 100) == 0:
         print(f"Progress: {i}/{len(work_orders)}")
 
 
-export = pandas.DataFrame(work_orders)
+export = pandas.json_normalize(work_orders, sep='.')
 export_path = os.path.join(os.path.dirname(
     os.path.realpath(__file__)), "export3.csv")
 with open(export_path, "w") as csv_path:
