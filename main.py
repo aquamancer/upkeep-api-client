@@ -1,7 +1,10 @@
 import atexit
 import sys
 import os
+from pathlib import Path
+import time
 import json
+import math
 import requests
 import pandas
 
@@ -30,6 +33,7 @@ print("Auth token successfully generated")
 print(f"Auth token will expire on {auth_response["result"]["expiresAt"]}")
 del auth_response  # raw response no longer needed
 
+print("Fetching all work orders...")
 work_orders_raw = requests.get("https://api.onupkeep.com/api/v2/work-orders",
                                headers=auth_token_header).json()
 
@@ -174,12 +178,96 @@ def replace_user_ids_with_fullname(work_order, user_id_field_names, folder_cache
         work_order[user_id_field_name] = replacement
 
 
+def prompt_load_file_cache(folder_cache):
+    root_dir = Path(__file__).parent
+    cache_dir = root_dir / "upkeep-api-cache"
+    if not root_dir.is_dir():
+        return
+    cache_dir.mkdir(exist_ok=True)
+    if not cache_dir.is_dir():
+        return
+    # grab a single file in the cache to determine the cache age
+    oldest_file = None
+    oldest_file_mtime = None
+    for folder_name in folder_cache:
+        folder = cache_dir / folder_name
+        folder.mkdir(exist_ok=True)
+        if not folder.is_dir():
+            continue
+        for child in folder.iterdir():
+            if not child.is_file:
+                continue
+            child_mtime = child.stat().st_mtime
+            if oldest_file_mtime is None or child_mtime < oldest_file_mtime:
+                oldest_file_mtime = child_mtime
+                oldest_file = child
+
+    if oldest_file is None:
+        print("No file cache found")
+        return
+
+    cache_age_seconds = time.time() - oldest_file_mtime
+    hours = math.floor(cache_age_seconds / 3600)
+    minutes = math.floor((cache_age_seconds % 3600) / 60)
+    seconds = math.floor(cache_age_seconds % 60)
+
+    print(f"""Subpage cache detected with \
+oldest file age {hours}h{minutes}m{seconds}s.
+Would you like to use it? (y/N)""")
+
+    use_cache = sys.__stdin__.readline()
+    print(use_cache)
+
+    return
+
+    if use_cache != "Y":
+        print("Clearing file cache")
+        for folder_name in folder_cache:
+            folder = cache_dir / folder_name
+            for file in folder.glob("*.json"):
+                file.unlink()
+        return
+
+    files_cached = 0
+    for folder_name in folder_cache:
+        folder = cache_dir / folder_name
+        for file in folder.glob("*.json"):
+            with file.open("r") as f:
+                data = json.load(f)
+                if "id" in data and data["id"] != "" and data["id"] is not None:
+                    folder_cache[folder_name]["id"] = data
+                    files_cached = files_cached + 1
+
+    print(f"Files loaded from cache: {files_cached}")
+
+
+def save_cache(folder_cache):
+    root_dir = Path(__file__).parent
+    cache_dir = root_dir / "upkeep-api-cache"
+    if not root_dir.is_dir():
+        return
+    cache_dir.mkdir(exist_ok=True)
+    if not cache_dir.is_dir():
+        return
+    for folder_name in folder_cache:
+        folder = cache_dir / folder_name
+        folder.mkdir(exist_ok=True)
+        if not folder.is_dir():
+            continue
+        for id in folder_cache[folder_name]:
+            export = folder / f"{id}.json"
+            with export.open("w") as f:
+                f.write(json.dumps(folder_cache[folder_name][id], indent=4))
+
+
 # keys must exactly match upkeep's api subpage name
 folder_cache = {
     "assets": {},
     "locations": {},
     "users": {}
 }
+
+prompt_load_file_cache(folder_cache)
 
 i = 1
 for work_order in work_orders:
@@ -223,6 +311,7 @@ for work_order in work_orders:
 
 export = pandas.json_normalize(work_orders, sep='.')
 export_path = os.path.join(os.path.dirname(
-    os.path.realpath(__file__)), "export3.csv")
+    os.path.realpath(__file__)), "export4.csv")
 with open(export_path, "w") as csv_path:
     export.to_csv(csv_path)
+save_cache(folder_cache)
