@@ -267,7 +267,7 @@ def save_cache(folder_cache):
             with export.open("w") as f:
                 f.write(json.dumps(folder_cache[folder_name][id], indent=4))
             files_cached = files_cached + 1
-    print(f"Supages cached (saved to disk): {files_cached}")
+    print(f"Subpages cached and saved to disk: {files_cached}")
 
 
 # keys must exactly match upkeep's api subpage name
