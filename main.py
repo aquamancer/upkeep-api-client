@@ -41,7 +41,8 @@ del email, password, auth_response
 
 print("Fetching all work orders...")
 work_orders_raw = requests.get("https://api.onupkeep.com/api/v2/work-orders",
-                               headers=auth_token_header).json()
+                               headers=auth_token_header,
+                               params={"limit": 5000}).json()
 
 if work_orders_raw["success"] is False:
     print("All Work Orders response failed")
