@@ -328,6 +328,7 @@ if not root_dir.is_dir():
 export_dir.mkdir(exist_ok=True)
 if not export_dir.is_dir():
     print(f"Could not export csv: {export_dir} could not be created")
+    sys.exit(1)
 
 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 export_path = export_dir / f"{timestamp}.csv"
